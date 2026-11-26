@@ -1,0 +1,31 @@
+# Local Apps Script binding and authentication
+.clasp.json
+.clasp*.json
+!.clasp.example.json
+.clasprc*
+# Credentials and local environment
+.env
+.env.*
+!.env.example
+credentials*.json
+secrets*
+*.pem
+*.key
+# Dependencies and generated files
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+# Private application data and exports
+private/
+exports/
+*.pdf
+*.docx
+*.xlsx
+*.xls
+*.csv
+*.tsv
+*.zip
+*.png
+*.jpg
+*.jpeg
