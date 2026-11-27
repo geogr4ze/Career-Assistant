@@ -142,16 +142,25 @@ function emConfig_() {
  * @param {Object} book Tracker spreadsheet.
  * @param {string} name Tab name.
  * @param {Object} headers Expected column headers by index.
+ * @param {number[]} dateColumns Columns requiring native valid date values.
  * @returns {Array[]} Display rows.
  * @throws {Error} If schema differs.
  */
-function emRows_(book,name,headers) {
+function emRows_(book, name, headers, dateColumns = []) {
   const sheet=book.getSheetByName(name);
   if (!sheet) throw Error("Missing tab: "+name);
-  const rows=sheet.getDataRange().getDisplayValues();
+  const range = sheet.getDataRange();
+  const rows = range.getDisplayValues();
+  const raw = range.getValues();
   for (const [i,header] of Object.entries(headers))
     if (rows[0][Number(i)] !== header) throw Error("Unexpected header in "+name+": "+header);
-  return rows.slice(1);
+  return rows.slice(1).map((row, index) => {
+    for (const col of dateColumns) {
+      const value = raw[index + 1][col];
+      if (!(value instanceof Date) || isNaN(value.getTime())) row[col] = "";
+    }
+    return row;
+  });
 }
 
 /**
@@ -162,9 +171,9 @@ function emRows_(book,name,headers) {
  */
 function emReadEvents_(book) {
   return emEvents_(emRows_(book,"Applications",{0:"Application ID",1:"Employer",
-    2:"Position",11:"Date submitted",13:"Confirmation / proof"}),
+    2:"Position",11:"Date submitted",13:"Confirmation / proof"}, [11]),
   emRows_(book,"Responses",{0:"Response ID",1:"Application ID",2:"Received date/time (PT)",
-    4:"Response type",6:"Summary",8:"Action required",9:"Action deadline (PT)"}));
+    4:"Response type",6:"Summary",8:"Action required",9:"Action deadline (PT)"}, [2]));
 }
 
 /**
@@ -205,10 +214,11 @@ function emIndex_(sheet) {
 /**
  * Format a Vancouver calendar day.
  * @param {Date} date Instant.
- * @returns {string} Date key.
+ * @returns {string} Text-only date key (PT:yyyy-MM-dd).
  */
 function emDay_(date) {
-  return Utilities.formatDate(date,EM.zone,"yyyy-MM-dd");
+  // Prefix the key so Sheets cannot auto-convert it into a locale-specific date.
+  return "PT:" + Utilities.formatDate(date, EM.zone, "yyyy-MM-dd");
 }
 
 /**
