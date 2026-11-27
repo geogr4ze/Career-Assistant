@@ -54,7 +54,8 @@ const CA = Object.freeze({
 });
 
 /**
- * Build default rows for the Settings tab. New installations start unarmed, with all routes OFF and limits/quiet hours awaiting user input.
+ * Build default rows for the Settings tab. New installations start unarmed, with all routes OFF
+ *   and limits/quiet hours awaiting user input.
  * @returns {Array<Array<string>>} Setting name, initial value and description for each row.
  * @effects None; does not write to Sheets.
  */

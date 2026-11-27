@@ -26,11 +26,13 @@ not contact employers, change applications, book interviews or send approvals.
 Priority employer matching is an explicit illustrative list, not a definitive classification.
 It links to the tracker rather than embedding private documents or raw employer email.
 It sends up to ten messages per run and thirty attempts per Vancouver calendar day,
-subject to Google quota. Email can arrive during existing SMS/call quiet hours.
+subject to Google quota. Email uses the existing SMS/call quiet hours from tracker Settings. Missing or
+invalid quiet hours defer delivery and surface an execution error.
 A SENT state means Gmail accepted the request, not confirmed inbox delivery.
 
 SENDING/REVIEW records require manual investigation and are never automatically retried.
-Do not delete ledger rows to force a resend. A complete outage cannot report itself.
+Duplicate event IDs are quarantined; unrelated notifications continue. Every physical
+attempt counts toward the daily limit. Do not delete ledger rows to force a resend. A complete outage cannot report itself.
 ChatGPT remains the approval and incident reporting channel, including system failures
 not represented as application records; the new email path does not replace it yet.
 
@@ -45,3 +47,5 @@ environment without provider calls. Apps Script authorization, trigger execution
 ledger behavior and genuine event delivery still require a live user-side test.
 
 Run the reproducible local checks with `node email-monitor/test.cjs`.
+
+Run the shared status/quiet-hours regression checks with `node tests/status-regression.cjs`.
