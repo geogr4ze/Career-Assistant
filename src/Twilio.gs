@@ -1,7 +1,9 @@
 /**
  * Read private Twilio settings from Script Properties and validate their basic format.
- * @returns {{sid:string,token:string,from:string,to:string,mode:string}} Account credentials, distinct E.164 numbers and explicit TRIAL/PRODUCTION mode.
- * @throws {Error} If properties are absent or invalid. Format validation does not verify account ownership or service availability.
+ * @returns {{sid:string,token:string,from:string,to:string,mode:string}} Account credentials,
+ *   distinct E.164 numbers and explicit TRIAL/PRODUCTION mode.
+ * @throws {Error} If properties are absent or invalid. Format validation does not verify account
+ *   ownership or service availability.
  * @effects Reads private properties; does not log their values or contact Twilio.
  */
 function credentials_() {
@@ -82,8 +84,10 @@ function twilioPayload_(c, ch, type) {
  * @param {string} path - Account-relative API resource path.
  * @param {string} method - HTTP method (get or post in current callers).
  * @param {Object} [payload] - Form data for requests that require it.
- * @returns {{state:string,sid:string,status:string,note:string}} ACCEPTED for a 2xx response with a SID, FAILED for 4xx, REVIEW otherwise.
- * @effects Contacts Twilio; POST requests can incur charges. Logs only sanitized provider error codes, not raw response bodies.
+ * @returns {{state:string,sid:string,status:string,note:string}} ACCEPTED for a 2xx response with
+ *   a SID, FAILED for 4xx, REVIEW otherwise.
+ * @effects Contacts Twilio; POST requests can incur charges. Logs only sanitized provider error
+ *   codes, not raw response bodies.
  * @throws {Error} Transport or Apps Script service exceptions may propagate; ACCEPTED does not guarantee delivery.
  */
 function twilioRequest_(c, path, method, payload) {

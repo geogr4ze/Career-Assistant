@@ -21,8 +21,10 @@ function onOpen() {
 /**
  * Initialize the bound tracker with required operational tabs, settings and formatting.
  * @requires Active spreadsheet with Applications, Responses and Interviews tabs.
- * @effects Saves the private spreadsheet ID, creates missing tabs/default rows, adjusts validation and formatting, and logs setup. Existing settings are preserved; setup does not arm alerts.
- * @throws {Error} If the spreadsheet or required tabs are unavailable, or an existing operational header differs. Earlier setup writes may already have occurred.
+ * @effects Saves the private spreadsheet ID, creates missing tabs/default rows, adjusts validation
+ *   and formatting, and logs setup. Existing settings are preserved; setup does not arm alerts.
+ * @throws {Error} If the spreadsheet or required tabs are unavailable, or an existing operational
+ *   header differs. Earlier setup writes may already have occurred.
  */
 function setupCareerAssistant() {
   const b = SpreadsheetApp.getActiveSpreadsheet();
@@ -95,7 +97,8 @@ function setupCareerAssistant() {
 /**
  * Replace existing polling triggers for this script with one time-driven trigger.
  * @requires POLL_MINUTES is one of 1, 5, 10, 15 or 30 and trigger permissions are available.
- * @effects Removes existing pollCareerAlerts triggers visible to the executing account, installs a new one and logs success.
+ * @effects Removes existing pollCareerAlerts triggers visible to the executing account, installs a
+ *   new one and logs success.
  * @throws {Error} If interval validation or trigger creation fails.
  */
 function installCareerTrigger() {
@@ -120,7 +123,8 @@ function removeCareerTrigger() {
 
 /**
  * Disarm automatic delivery using both live controls.
- * @effects Deletes CAREER_LIVE_ARMED, writes MODE=DRY_RUN and logs the change. Does not remove the polling trigger or retract a request already sent.
+ * @effects Deletes CAREER_LIVE_ARMED, writes MODE=DRY_RUN and logs the change. Does not remove the
+ *   polling trigger or retract a request already sent.
  */
 function disableCareerAlerts() {
   PropertiesService.getScriptProperties().deleteProperty('CAREER_LIVE_ARMED');
@@ -131,7 +135,8 @@ function disableCareerAlerts() {
 /**
  * Enable future automatic alerts only after the user approves potentially paid delivery.
  * @requires Valid settings/credentials, at least one enabled route, spreadsheet UI and lock access.
- * @effects On approval, marks existing events as BASELINE for both channels (or converts existing PENDING rows), then sets MODE=LIVE and CAREER_LIVE_ARMED=YES. Does not send alerts directly.
+ * @effects On approval, marks existing events as BASELINE for both channels (or converts existing
+ *   PENDING rows), then sets MODE=LIVE and CAREER_LIVE_ARMED=YES. Does not send alerts directly.
  * @throws {Error} For invalid configuration, unavailable resources or lock failure.
  * @returns {void} Cancellation leaves the live controls unchanged.
  */
@@ -143,7 +148,8 @@ function armCareerAlerts() {
     throw Error('Choose at least one notification route first.');
   const ui = SpreadsheetApp.getUi();
   if (ui.alert('Enable paid alerts?',
-    'This will skip all currently logged events and enable future SMS/calls to your verified personal number using your chosen policy. Continue?',
+    'This will skip all currently logged events and enable future SMS/calls to your verified '
+      + 'personal number using your chosen policy. Continue?',
     ui.ButtonSet.YES_NO
   ) !== ui.Button.YES)
     return;
@@ -158,7 +164,7 @@ function armCareerAlerts() {
       const item = old.get(e.id + '|' + ch);
       if (!item)
         appendNotification_(s, e, ch, 'BASELINE', now, 'Existing event skipped when arming.');
-      else if (item.values[4] === 'PENDING') {
+      else if (!item.duplicate && item.values[4] === 'PENDING') {
         s.getRange(item.row, 5).setValue('BASELINE');
         s.getRange(item.row, 10, 1, 2).setValues([['Existing pending event skipped when arming.', now]]);
       }

@@ -10,18 +10,29 @@ function log_(level, op, message) {
 }
 
 /**
- * Index existing notification rows by event ID and channel for duplicate checks.
- * @returns {Map<string,{row:number,values:Array<*>}>} Composite key to sheet row number and raw values; later duplicate rows replace earlier ones.
- * @effects Reads Notifications without modifying it.
+ * Index ledger rows without hiding duplicate delivery attempts.
+ * @returns {Map} Event/channel keys with representative rows and duplicate flags.
+ * @effects Reads Notifications; records all physical rows for daily attempt accounting.
+ * @throws {Error} If the notification ledger is unavailable.
  */
 function notificationIndex_() {
   const s = book_().getSheetByName('Notifications');
-  const rows = s.getDataRange().getValues();
+  const rows = s.getDataRange().getValues().slice(1);
   const map = new Map();
-  rows.slice(1).forEach((r, i) => {
-    if (r[0] && r[1])
-      map.set(r[0] + '|' + r[1], { row: i + 2, values: r });
+  map.attemptRows = rows;
+  rows.forEach((r, i) => {
+    if (!r[0] || !r[1])
+      return;
+    const key = r[0] + '|' + r[1];
+    const prior = map.get(key);
+    if (prior) {
+      prior.duplicate = true;
+      return;
+    }
+    map.set(key, { row: i + 2, values: r, duplicate: false });
   });
+  if ([...map.values()].some(item => item.duplicate))
+    Logger.log('Duplicate notification keys quarantined; inspect Notifications.');
   return map;
 }
 
@@ -48,8 +59,10 @@ function appendNotification_(s, e, ch, state, now, note) {
  * @param {{id:string,type:string,app:string}} e - Event record.
  * @param {string} ch - SMS or CALL.
  * @requires Caller has checked delivery policy and holds the script lock.
- * @returns {{state:string,sid:string,status:string,note:string}} Delivery request outcome; exceptions from deliver_ become REVIEW.
- * @effects Writes and flushes ledger state before/after a potentially billable Twilio request. Does not retry ambiguous outcomes.
+ * @returns {{state:string,sid:string,status:string,note:string}} Delivery request outcome;
+ *   exceptions from deliver_ become REVIEW.
+ * @effects Writes and flushes ledger state before/after a potentially billable Twilio request.
+ *   Does not retry ambiguous outcomes.
  */
 function attempt_(s, row, e, ch) {
   // Persist the attempt before calling the provider so an interrupted run is not blindly retried.
@@ -83,7 +96,8 @@ function attempt_(s, row, e, ch) {
  */
 function countAttempts_(idx, ch, now) {
   let n = 0;
-  idx.forEach(({ values: r }) => {
+  const rows = idx.attemptRows || Array.from(idx.values(), item => item.values);
+  rows.forEach(r => {
     if (r[1] === ch && r[6] instanceof Date && localDay_(r[6]) === localDay_(now))
       n++;
   });
@@ -93,7 +107,8 @@ function countAttempts_(idx, ch, now) {
 /**
  * Preview up to 25 routed events that have no ledger row or are still PENDING.
  * @requires Initialized tracker and spreadsheet UI context.
- * @effects Reads settings/events/ledger, writes a diagnostic log and opens a dialog. Does not call Twilio or enforce current quiet-hour/usage eligibility.
+ * @effects Reads settings/events/ledger, writes a diagnostic log and opens a dialog. Does not call
+ *   Twilio or enforce current quiet-hour/usage eligibility.
  * @returns {void}
  */
 function previewCareerAlerts() {
@@ -102,7 +117,7 @@ function previewCareerAlerts() {
   const planned = [];
   eventList_().forEach(e => channels_(c['ROUTE_' + e.type]).forEach(ch => {
     const old = idx.get(e.id + '|' + ch);
-    if (!old || old.values[4] === 'PENDING')
+    if (!old || (!old.duplicate && old.values[4] === 'PENDING'))
       planned.push(ch + ' | ' + e.type + ' | ' + e.app);
   }));
   const msg = planned.length
@@ -115,7 +130,8 @@ function previewCareerAlerts() {
 /**
  * Process eligible notification events on a timer; skip execution unless LIVE mode and explicit arming are both active.
  * @requires Initialized tracker, valid configuration and configured Twilio credentials for live operation.
- * @effects Acquires the script lock, writes ledger rows, may make paid requests, and refreshes provider statuses. Quiet hours, daily limits and a ten-attempt per-run cap restrict sends.
+ * @effects Acquires the script lock, writes ledger rows, may make paid requests, and refreshes
+ *   provider statuses. Quiet hours, daily limits and a ten-attempt per-run cap restrict sends.
  * @returns {void} Returns early if the lock is unavailable or live delivery is disabled.
  * @throws {Error} Polling failures are logged and rethrown; the lock is released in finally.
  */
@@ -141,7 +157,7 @@ function pollCareerAlerts() {
       for (const ch of channels_(c['ROUTE_' + e.type])) {
         // An event/channel pair already in a non-PENDING state is not sent again.
         let item = idx.get(e.id + '|' + ch);
-        if (item && item.values[4] !== 'PENDING')
+        if (item && (item.duplicate || item.values[4] !== 'PENDING'))
           continue;
         if (!item) {
           const row = appendNotification_(s, e, ch, 'PENDING', now, 'Queued');
@@ -172,34 +188,114 @@ function pollCareerAlerts() {
 }
 
 /**
- * Refresh provider status for previously accepted notifications with nonterminal statuses.
+ * Check whether the provider status is terminal for this specific channel.
+ * @param {string} channel - SMS or CALL.
+ * @param {string} status - Last observed provider status.
+ * @returns {boolean} True only for a known terminal status.
+ * @effects None.
+ */
+function terminalStatus_(channel, status) {
+  const value = String(status).toLowerCase();
+  if (channel === 'SMS')
+    return ['delivered', 'undelivered', 'failed', 'canceled', 'received'].includes(value);
+  if (channel === 'CALL')
+    return ['completed', 'busy', 'no-answer', 'failed', 'canceled'].includes(value);
+  return false;
+}
+
+/**
+ * Recover the persisted count of consecutive failed GET requests.
+ * @param {string} note - Notification ledger note.
+ * @returns {number} Failure count, or zero when no marker is present.
+ * @effects None.
+ */
+function lookupFailures_(note) {
+  const match = String(note || '').match(/\[status failures: (\d+)\]/);
+  return match ? Number(match[1]) : 0;
+}
+
+/**
+ * Remove the internal status retry marker from an existing diagnostic note.
+ * @param {string} note - Notification ledger note.
+ * @returns {string} Original diagnostic text without the retry marker.
+ * @effects None.
+ */
+function lookupBaseNote_(note) {
+  return String(note || '').replace(/\s*\[status failures: \d+\].*$/, '').trim();
+}
+
+/**
+ * Refresh unresolved delivery records, prioritizing the least recently checked.
  * @param {GoogleAppsScript.Spreadsheet.Sheet} s - Notifications sheet.
- * @param {Map<string,{row:number,values:Array<*>}>} idx - Snapshot of existing ledger rows.
- * @effects Makes at most 15 eligible Twilio GET requests and updates provider status and timestamp on success. Individual request failures are ignored.
- * @returns {void} Does not initiate new SMS or calls.
+ * @param {Map} idx - Ledger index from notificationIndex_.
+ * @requires Caller holds the script lock and has valid Twilio credentials.
+ * @effects Makes at most 15 GET requests; persists every lookup outcome.
+ * Stops tracking after three consecutive errors, a missing resource, or 72 hours.
+ * A REVIEW state preserves the last known provider status and never causes a resend.
+ * @returns {void} Does not send SMS or make calls.
+ * @throws {Error} If credentials or ledger writes fail.
  */
 function refreshStatuses_(s, idx) {
   const c = credentials_();
-  let n = 0;
-  for (const { row, values: r } of idx.values()) {
-    if (n >= 15)
-      break;
-    if (r[4] !== 'ACCEPTED' || !r[7] || [
-      'delivered', 'undelivered', 'failed', 'completed', 'busy', 'no-answer', 'canceled', 'sent'
-    ].includes(String(r[8])))
-      continue;
-    const prefix = r[1] === 'SMS' ? 'Messages/' : 'Calls/';
-    if (!/^(SM|MM|CA)[0-9a-fA-F]{32}$/.test(r[7]))
-      continue;
-    try {
-      const result = twilioRequest_(c, prefix + r[7] + '.json', 'get');
-      if (result.sid) {
-        s.getRange(row, 9).setValue(result.status);
-        s.getRange(row, 11).setValue(new Date());
+  const now = new Date();
+  const maxAge = 72 * 60 * 60 * 1000;
+  const candidates = [...idx.values()].filter(({ values: r, duplicate }) =>
+    !duplicate && r[4] === 'ACCEPTED'
+    && ['SMS', 'CALL'].includes(r[1]) && !terminalStatus_(r[1], r[8]));
+  candidates.sort((a, b) => {
+    const left = a.values[10] instanceof Date ? a.values[10].getTime() : 0;
+    const right = b.values[10] instanceof Date ? b.values[10].getTime() : 0;
+    return (left || 0) - (right || 0) || a.row - b.row;
+  });
+
+  for (const { row, values: r } of candidates.slice(0, 15)) {
+    const channel = r[1];
+    const sid = String(r[7] || '');
+    const validSid = channel === 'SMS' ? /^(SM|MM)[0-9a-f]{32}$/i : /^CA[0-9a-f]{32}$/i;
+    const attempted = r[6] instanceof Date ? r[6].getTime() : NaN;
+    const baseNote = lookupBaseNote_(r[9]);
+    let review = '';
+    let status = r[8];
+    let note = baseNote;
+
+    if (!validSid.test(sid)) {
+      review = 'Missing or invalid provider SID.';
+    } else if (!Number.isFinite(attempted) || now.getTime() - attempted >= maxAge) {
+      review = 'Status unresolved after 72 hours or attempt timestamp unavailable.';
+    } else {
+      let result;
+      try {
+        const prefix = channel === 'SMS' ? 'Messages/' : 'Calls/';
+        result = twilioRequest_(c, prefix + sid + '.json', 'get');
+      } catch (_) {
+        // No raw exception text: it can contain provider credentials or URLs.
+        result = { status: 'Transport error' };
       }
-    } catch (_) {
+
+      if (result.state === 'ACCEPTED' && result.sid === sid
+        && result.status && result.status !== 'accepted') {
+        status = result.status;
+        // Successful lookups reset the consecutive failure counter.
+      } else {
+        const failures = lookupFailures_(r[9]) + 1;
+        const detail = /^HTTP \d{3}$/.test(result.status) ? result.status : 'Lookup unavailable';
+        note = baseNote + ' [status failures: ' + failures + '] ' + detail;
+        if (result.status === 'HTTP 404' || result.status === 'HTTP 410')
+          review = 'Provider resource unavailable (' + result.status + ').';
+        else if (failures >= 3)
+          review = 'Three consecutive status lookups failed (' + detail + ').';
+      }
     }
-    n++;
+
+    if (review) {
+      // Persist the review state before diagnostics; never infer actual delivery failure.
+      s.getRange(row, 5).setValue('REVIEW');
+      note = baseNote + ' ' + review + ' Inspect provider logs; no automatic retry or resend.';
+    }
+    s.getRange(row, 9, 1, 3).setValues([[status, note.trim(), now]]);
+    SpreadsheetApp.flush();
+    if (review)
+      log_('ERROR', 'Status lookup', channel + ' row ' + row + ': ' + review);
   }
 }
 
@@ -207,7 +303,8 @@ function refreshStatuses_(s, idx) {
  * Ask for explicit permission to send one test notification, including while the tracker is in DRY_RUN.
  * @param {string} ch - SMS or CALL.
  * @requires Valid settings, configured credentials and a spreadsheet UI context.
- * @effects On approval, locks execution, checks quiet hours/daily limits, creates a TEST row and attempts a potentially billable request.
+ * @effects On approval, locks execution, checks quiet hours/daily limits, creates a TEST row and
+ *   attempts a potentially billable request.
  * @throws {Error} If settings/credentials are invalid, the lock cannot be obtained or delivery is restricted.
  * @returns {void} Cancellation sends nothing.
  */
