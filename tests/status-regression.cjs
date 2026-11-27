@@ -14,7 +14,8 @@ const vm = require('node:vm');
 function runRegressionChecks(mainSource, emailSource, run) {
   const main = run(mainSource + "\n" + mainScenarios());
   const email = run(emailSource + "\n" + emailScenarios());
-  return main + email;
+  return main + email + run(mainSource + "\n" + pipelineFixtures() + mainPipeline())
+    + run(emailSource + "\n" + pipelineFixtures() + emailPipeline());
 }
 
 /**
@@ -161,6 +162,173 @@ try {emQuietSettings_(book);} catch (_) {rejected=true;}
 check(rejected,"duplicate quiet settings fail closed");
 check(emPriority_("NVIDIA Corp."),"priority suffix preserved");
 check(!emPriority_("Not NVIDIA"),"no false employer match");
+return checks;
+`;
+}
+
+/**
+ * Construct synthetic tracker and provider mocks.
+ * @returns {string} Isolated test source.
+ * @effects None; constructs fixtures only.
+ */
+function pipelineFixtures() {
+  return `
+let checks = 0;
+/** Verify a test condition and count successful assertions; throws on failure. */
+function check(value, label) {
+  if (!value) throw Error(label);
+  checks++;
+}
+/** Create a mutable in-memory sheet; does not access Google Sheets. */
+function fakeSheet(rows) {
+  return {
+    rows,
+    getDataRange: () => ({
+      getValues: () => rows.map(row => row.slice()),
+      getDisplayValues: () => rows.map(row => row.map(value =>
+        value instanceof Date ? value.toISOString() : String(value ?? "")))
+    }),
+    getRange: (row, col, height = 1, width = 1) => ({
+      getDisplayValues: () => rows.slice(row - 1, row - 1 + height).map(values =>
+        values.slice(col - 1, col - 1 + width).map(String)),
+      setValue: value => { rows[row - 1][col - 1] = value; },
+      setValues: values => values.forEach((line, i) => line.forEach((value, j) => {
+        rows[row - 1 + i][col - 1 + j] = value;
+      }))
+    }),
+    appendRow: row => rows.push(row.slice()),
+    getLastRow: () => rows.length
+  };
+}
+const applicationHeaders = Array(24).fill("");
+applicationHeaders[0] = "Application ID";
+applicationHeaders[1] = "Employer";
+applicationHeaders[2] = "Position";
+applicationHeaders[10] = "Status";
+applicationHeaders[11] = "Date submitted";
+applicationHeaders[13] = "Confirmation / proof";
+const application = Array(24).fill("");
+application[0] = "SIM-APP";
+application[1] = "NVIDIA";
+application[2] = "Intern";
+application[10] = "Submitted";
+application[11] = new Date();
+application[13] = "Synthetic confirmation";
+const responseHeaders = ["Response ID", "Application ID", "Received date/time (PT)",
+  "Sender", "Response type", "Subject", "Summary", "Gmail thread / source URL",
+  "Action required", "Action deadline (PT)", "Action status"];
+const response = ["SIM-REPLY", "SIM-APP", new Date(), "", "Interview invitation", "",
+  "Synthetic interview", "", "Choose time", "", ""];
+const sheets = {
+  Applications: fakeSheet([applicationHeaders, application]),
+  Responses: fakeSheet([responseHeaders, response]),
+  Settings: fakeSheet([["Setting", "Value"], ["QUIET_START", "21:00"], ["QUIET_END", "08:00"]]),
+  "Approval Queue": fakeSheet([["Approval ID", "Application ID", "", "", "", "", "Status"]]),
+  "System Logs": fakeSheet([["Timestamp (PT)", "Level", "Operation", "Message"]])
+};
+const book = { getSheetByName: name => sheets[name] };
+const properties = {
+  CAREER_LIVE_ARMED: "YES",
+  EMAIL_MONITOR_ENABLED: "YES",
+  EMAIL_MONITOR_FROM: "alias@example.invalid",
+  EMAIL_MONITOR_TO: "owner@example.invalid",
+  EMAIL_MONITOR_SHEET_ID: "SYNTHETIC"
+};
+let clock = "12:00";
+const PropertiesService = {
+  getScriptProperties: () => ({ getProperty: key => properties[key] })
+};
+const LockService = {
+  getScriptLock: () => ({ tryLock: () => true, releaseLock() {} })
+};
+const SpreadsheetApp = { openById: () => book, flush() {} };
+const Utilities = { formatDate: (date, zone, format) =>
+  format === "HH:mm" ? clock : "2026-11-26" };
+const Logger = { log() {} };
+const console = { warn() {}, error() {} };
+`;
+}
+
+/**
+ * Exercise automatic SMS and call delivery against mocks.
+ * @returns {string} Isolated test source.
+ * @effects None; constructs fixtures only.
+ */
+function mainPipeline() {
+  return `
+sheets.Notifications = fakeSheet([CA.sheets.Notifications]);
+book_ = () => book;
+const config = {
+  MODE: "LIVE", QUIET_START: "21:00", QUIET_END: "08:00",
+  MAX_SMS_PER_DAY: "20", MAX_CALLS_PER_DAY: "3",
+  ...Object.fromEntries(CA.routes.map(key => ["ROUTE_" + key, "OFF"])),
+  ROUTE_SUBMITTED: "SMS", ROUTE_INTERVIEW: "BOTH"
+};
+getSettings_ = () => config;
+credentials_ = () => ({});
+const sends = [];
+deliver_ = (channel, type) => {
+  const active = sheets.Notifications.rows.filter(r => r[4] === "SENDING");
+  check(active.length === 1 && active[0][6] instanceof Date
+    && active[0][1] === channel && active[0][2] === type,
+    "persist the correct attempt before provider call");
+  sends.push([channel, type]);
+  return { state:"ACCEPTED", sid:(channel === "SMS" ? "SM" : "CA")
+    + String(sends.length).padStart(32,"0"), status:"queued", note:"mock accepted" };
+};
+twilioRequest_ = (c, path, method) => {
+  check(method === "get", "status lookup is read-only");
+  const sid = path.split("/")[1].split(".")[0];
+  return { state:"ACCEPTED", sid, status:sid.startsWith("CA") ? "completed" : "delivered" };
+};
+clock = "02:00";
+pollCareerAlerts();
+check(sends.length === 0, "quiet hours block SMS and calls");
+check(sheets.Notifications.rows.length === 4, "three events queued by channel");
+clock = "08:00";
+pollCareerAlerts();
+check(sends.length === 3, "one submission SMS, one interview SMS and call");
+check(sends.some(s => s[0] === "CALL" && s[1] === "INTERVIEW"), "interview call routed");
+pollCareerAlerts();
+check(sends.length === 3, "repeated polls do not resend");
+check(sheets.Notifications.rows.slice(1).every(r => r[4] === "ACCEPTED"),
+  "accepted requests recorded");
+return checks;
+`;
+}
+
+/**
+ * Exercise automatic email delivery against mocks.
+ * @returns {string} Isolated test source.
+ * @effects None; constructs fixtures only.
+ */
+function emailPipeline() {
+  return `
+sheets["Email Notifications"] = fakeSheet([EM.headers]);
+const Session = { getEffectiveUser: () => ({getEmail: () => properties.EMAIL_MONITOR_TO}) };
+const MailApp = { getRemainingDailyQuota: () => 100 };
+const sends = [];
+const GmailApp = {
+  getAliases: () => [properties.EMAIL_MONITOR_FROM],
+  sendEmail: (to, subject, text, options) => {
+    const active = sheets["Email Notifications"].rows.filter(r => r[1] === "SENDING");
+    check(active.length === 1, "persist email attempt before Gmail call");
+    check(to === properties.EMAIL_MONITOR_TO && options.from === properties.EMAIL_MONITOR_FROM,
+      "email targets verified owner from verified alias");
+    sends.push({subject,text,options});
+  }
+};
+clock = "02:00";
+pollEmployerMonitorEmail();
+check(sends.length === 0, "quiet hours block email");
+clock = "08:00";
+pollEmployerMonitorEmail();
+check(sends.length === 2, "submission and interview email routed");
+check(sends.every(s => s.subject.startsWith("PRIORITY")), "priority HTML email subjects");
+pollEmployerMonitorEmail();
+check(sends.length === 2, "repeat email poll does not resend");
+check(sheets["Email Notifications"].rows.slice(1).every(r => r[1] === "SENT"),
+  "Gmail acceptance recorded");
 return checks;
 `;
 }

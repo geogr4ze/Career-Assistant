@@ -33,6 +33,7 @@ function emEscape_(value) {
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   })[c]);
 }
+
 /**
  * Normalize and bound a tracker field.
  * @param {*} value Input.
@@ -59,6 +60,7 @@ function emPriority_(employer) {
   const name = employer.toLowerCase().replace(/ (inc\.?|corporation|corp\.?|canada)$/, "");
   return names.includes(name);
 }
+
 /**
  * Extract deduplicated events from tracker rows; no I/O.
  * @param {Array[]} apps Application rows.
@@ -93,6 +95,7 @@ function emEvents_(apps, responses) {
   return Array.from(events.values()).sort((a, b) =>
     Number(emPriority_(b.employer)) - Number(emPriority_(a.employer)));
 }
+
 /**
  * Render a notification with escaped tracker data.
  * @param {Object} event Verified tracker event.
@@ -204,6 +207,7 @@ function emReadEvents_(book) {
   }, [2]);
   return emEvents_(apps, responses);
 }
+
 /**
  * Open a dedicated ledger; create only during explicit setup.
  * @param {Object} book Tracker spreadsheet.
@@ -224,6 +228,7 @@ function emLedger_(book, create) {
     throw Error("Missing or invalid email notification ledger.");
   return sheet;
 }
+
 /**
  * Index ledger entries; quarantine duplicate IDs without blocking unrelated events.
  * @param {Object} sheet Ledger sheet.
@@ -250,6 +255,7 @@ function emIndex_(sheet) {
     console.warn("Duplicate email event IDs quarantined; inspect Email Notifications.");
   return index;
 }
+
 /**
  * Format a Vancouver calendar day.
  * @param {Date} date Instant.
@@ -323,6 +329,7 @@ function enableEmployerMonitorEmail() {
     lock.releaseLock();
   }
 }
+
 /**
  * Disable the email trigger and preserve the ledger.
  * @effects Changes only this standalone project; does not touch SMS or calls.
@@ -339,6 +346,7 @@ function disableEmployerMonitorEmail() {
     lock.releaseLock();
   }
 }
+
 /**
  * Process new verified tracker events once automatically.
  * @requires Enabled project, valid alias and ledger.
