@@ -43,3 +43,5 @@ preserved. Never run multiple independent copies against the same ledger.
 Pure event extraction and rendering checks were exercised in an isolated JavaScript
 environment without provider calls. Apps Script authorization, trigger execution,
 ledger behavior and genuine event delivery still require a live user-side test.
+
+Run the reproducible local checks with `node email-monitor/test.cjs`.
