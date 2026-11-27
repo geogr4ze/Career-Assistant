@@ -29,3 +29,5 @@ exports/
 *.png
 *.jpg
 *.jpeg
+# Other files to ignore
+Recovery.txt
